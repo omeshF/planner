@@ -27,12 +27,10 @@ st.set_page_config(
 # GOOGLE SHEETS INTEGRATION
 # ==============================
 def get_gsheets_client():
-    """Create a gspread client using Streamlit secrets"""
     if not GSHEETS_AVAILABLE:
         st.error("❌ gspread not installed. Add it to requirements.txt")
         st.stop()
     
-    # Get credentials from Streamlit secrets
     try:
         creds_info = st.secrets["google_sheets"]["credentials"]
         if isinstance(creds_info, str):
@@ -47,38 +45,31 @@ def get_gsheets_client():
         st.stop()
 
 def load_sheet_data(worksheet_name):
-    """Load data from a worksheet as list of dicts"""
     try:
         sheet_url = st.secrets["google_sheets"]["url"]
         gc = get_gsheets_client()
         sheet = gc.open_by_url(sheet_url)
         worksheet = sheet.worksheet(worksheet_name)
-        records = worksheet.get_all_records()
-        return records
+        return worksheet.get_all_records()
     except Exception as e:
         st.warning(f"⚠️ Could not load '{worksheet_name}': {e}")
         return []
 
 def save_sheet_data(worksheet_name, data):
-    """Save list of dicts to worksheet"""
     try:
         sheet_url = st.secrets["google_sheets"]["url"]
         gc = get_gsheets_client()
         sheet = gc.open_by_url(sheet_url)
-        
-        # Create worksheet if it doesn't exist
         try:
             worksheet = sheet.worksheet(worksheet_name)
         except gspread.exceptions.WorksheetNotFound:
             worksheet = sheet.add_worksheet(title=worksheet_name, rows="1000", cols="10")
         
         if not data:
-            # Clear sheet
             worksheet.clear()
             return
         
         df = pd.DataFrame(data)
-        # Ensure correct column order
         if worksheet_name == "modules":
             df = df[['id', 'name', 'total_hours']]
         elif worksheet_name == "entries":
@@ -89,30 +80,25 @@ def save_sheet_data(worksheet_name, data):
         st.error(f"❌ Failed to save '{worksheet_name}': {e}")
 
 # ==============================
-# DATA LOADING / SAVING
+# DATA LOADING / SAVING (TEXT-BASED IDs)
 # ==============================
 def load_modules():
     records = load_sheet_data("modules")
     modules = []
-    next_id = 1
     for r in records:
         try:
-            # Skip rows with missing/invalid id
-            if not r.get('id') or str(r['id']).strip() == '':
+            mod_id = str(r['id']).strip()
+            if not mod_id:
                 continue
-            module_id = int(float(r['id']))  # handles "1.0" from Sheets
-            total_hours = float(r['total_hours'])
             modules.append({
-                'id': module_id,
+                'id': mod_id,
                 'name': str(r['name']).strip(),
-                'total_hours': total_hours
+                'total_hours': float(r['total_hours'])
             })
-            if module_id >= next_id:
-                next_id = module_id + 1
         except (ValueError, KeyError, TypeError) as e:
             st.warning(f"⚠️ Skipping invalid module row: {r}")
             continue
-    return modules, next_id
+    return modules
 
 def load_entries():
     records = load_sheet_data("entries")
@@ -123,23 +109,12 @@ def load_entries():
                 continue
             entries.append({
                 'week': int(float(r['week'])),
-                'module_id': int(float(r['module_id'])),
+                'module_id': str(r['module_id']).strip(),
                 'hours': float(r['hours'])
             })
         except (ValueError, KeyError, TypeError) as e:
             st.warning(f"⚠️ Skipping invalid entry row: {r}")
             continue
-    return entries
-
-def load_entries():
-    records = load_sheet_data("entries")
-    entries = []
-    for r in records:
-        entries.append({
-            'week': int(r['week']),
-            'module_id': int(r['module_id']),
-            'hours': float(r['hours'])
-        })
     return entries
 
 def save_modules(modules):
@@ -149,7 +124,7 @@ def save_entries(entries):
     save_sheet_data("entries", entries)
 
 # ==============================
-# Rest of your app (unchanged functions)
+# HELPER FUNCTIONS (UNCHANGED)
 # ==============================
 def get_source_color(source):
     color_map = {
@@ -184,20 +159,6 @@ def get_source_icon(source):
 def get_week_monday(any_date):
     return any_date - timedelta(days=any_date.weekday())
 
-# Initialize session state
-if 'modules' not in st.session_state:
-    modules, next_id = load_modules()
-    entries = load_entries()
-    st.session_state.modules = modules
-    st.session_state.entries = entries
-    st.session_state.next_id = next_id
-
-if 'page' not in st.session_state:
-    st.session_state.page = 'modules'
-
-if 'calendar_week_start' not in st.session_state:
-    st.session_state.calendar_week_start = get_week_monday(datetime.today().date())
-
 def get_week_number():
     return datetime.now().isocalendar()[1]
 
@@ -222,13 +183,12 @@ def calculate_module_stats():
 def calculate_week_total(week_num):
     return sum(e['hours'] for e in st.session_state.entries if e['week'] == week_num)
 
-def add_module(name, hours):
+def add_module(module_code, name, hours):
     st.session_state.modules.append({
-        'id': st.session_state.next_id,
+        'id': module_code,
         'name': name,
         'total_hours': hours
     })
-    st.session_state.next_id += 1
     save_modules(st.session_state.modules)
 
 def delete_module(module_id):
@@ -299,7 +259,25 @@ def to_excel(df):
         df.to_excel(writer, index=False, sheet_name='Hours Report')
     return output.getvalue()
 
-# Navigation
+# ==============================
+# SESSION STATE INIT
+# ==============================
+if 'modules' not in st.session_state:
+    st.session_state.modules = load_modules()
+    st.session_state.entries = load_entries()
+
+if 'page' not in st.session_state:
+    st.session_state.page = 'modules'
+
+if 'calendar_week_start' not in st.session_state:
+    st.session_state.calendar_week_start = get_week_monday(datetime.today().date())
+
+if 'selected_week' not in st.session_state:
+    st.session_state.selected_week = get_week_number()
+
+# ==============================
+# NAVIGATION
+# ==============================
 st.sidebar.title("Navigation")
 page = st.sidebar.radio("Go to:", ["📚 Modules", "⏰ Claim Hours", "📊 Reports", "📅 Calendar Viewer"])
 
@@ -312,53 +290,54 @@ elif page == "📊 Reports":
 else:
     st.session_state.page = 'calendar'
 
-# Main App
+# Persistent data notice
+if st.session_state.page in ['modules', 'claim', 'reports']:
+    st.info("✅ **Your data is saved permanently in Google Sheets!**")
+
+# ==============================
+# MAIN APP PAGES
+# ==============================
 if st.session_state.page == 'modules':
     st.title("📚 Module Management")
     st.write("Add and manage your university modules")
     
     st.markdown("---")
-    
     st.subheader("➕ Add New Module")
-    col1, col2, col3 = st.columns([3, 2, 1])
+    col1, col2, col3, col4 = st.columns([2, 3, 1, 1])
     
     with col1:
-        new_module_name = st.text_input("Module Name", placeholder="e.g., CS101 - Introduction to Programming", key="new_name")
+        new_module_code = st.text_input("Module Code", placeholder="e.g., 6COM2008", key="new_code")
     with col2:
-        new_module_hours = st.number_input("Total Hours Allocated", min_value=0.0, step=0.5, key="new_hours")
+        new_module_name = st.text_input("Module Name", placeholder="e.g., IoT", key="new_name")
     with col3:
-        st.write("")
+        new_module_hours = st.number_input("Total Hours", min_value=0.0, step=0.5, key="new_hours")
+    with col4:
         st.write("")
         if st.button("Add Module", type="primary", use_container_width=True):
-            if new_module_name and new_module_hours > 0:
-                add_module(new_module_name, new_module_hours)
-                st.success(f"✅ Added: {new_module_name}")
+            if new_module_code and new_module_name and new_module_hours > 0:
+                add_module(new_module_code, new_module_name, new_module_hours)
+                st.success(f"✅ Added: {new_module_code} - {new_module_name}")
                 st.rerun()
             else:
-                st.error("Please enter both module name and hours")
+                st.error("Please fill all fields")
     
     st.markdown("---")
-    
     st.subheader("📋 Your Modules")
     
     if not st.session_state.modules:
-        st.info("No modules added yet. Add your first module above!")
+        st.info("No modules added yet.")
     else:
         module_stats = calculate_module_stats()
-        
         for module in module_stats:
             with st.container():
-                col1, col2, col3 = st.columns([3, 2, 1])
-                
+                col1, col2, col3 = st.columns([2, 2, 1])
                 with col1:
-                    st.markdown(f"**{module['name']}**")
-                    st.caption(f"Total Allocated: {module['total_hours']} hours")
-                
+                    st.markdown(f"**{module['id']}**")
+                    st.caption(module['name'])
                 with col2:
                     progress_pct = min(module['claimed'] / module['total_hours'], 1.0) if module['total_hours'] > 0 else 0
                     st.progress(progress_pct)
                     st.caption(f"Claimed: {module['claimed']:.1f}h | Remaining: {module['remaining']:.1f}h")
-                
                 with col3:
                     col_edit, col_del = st.columns(2)
                     with col_edit:
@@ -371,48 +350,47 @@ if st.session_state.page == 'modules':
                 
                 if st.session_state.get(f'editing_{module["id"]}', False):
                     with st.form(key=f'form_{module["id"]}'):
+                        edit_code = st.text_input("Module Code", value=module['id'])
                         edit_name = st.text_input("Module Name", value=module['name'])
                         edit_hours = st.number_input("Total Hours", value=float(module['total_hours']), min_value=0.0, step=0.5)
                         col_save, col_cancel = st.columns(2)
                         with col_save:
                             if st.form_submit_button("💾 Save", type="primary"):
-                                update_module(module['id'], edit_name, edit_hours)
+                                # Update in place
+                                for m in st.session_state.modules:
+                                    if m['id'] == module['id']:
+                                        m['id'] = edit_code
+                                        m['name'] = edit_name
+                                        m['total_hours'] = edit_hours
+                                        break
+                                save_modules(st.session_state.modules)
                                 st.session_state[f'editing_{module["id"]}'] = False
                                 st.rerun()
                         with col_cancel:
                             if st.form_submit_button("❌ Cancel"):
                                 st.session_state[f'editing_{module["id"]}'] = False
                                 st.rerun()
-                
                 st.markdown("---")
 
 elif st.session_state.page == 'claim':
-    if 'selected_week' not in st.session_state:
-        st.session_state.selected_week = get_week_number()
-    
     st.title("⏰ Claim Hours")
     st.write("Log your weekly hours by module")
     
     st.markdown("---")
-    
     col1, col2, col3, col4 = st.columns([1, 3, 1, 1])
-    
     with col1:
         if st.button("◀ Previous"):
             st.session_state.selected_week = max(1, st.session_state.selected_week - 1)
             st.rerun()
-    
     with col2:
         current_year = datetime.now().year
         monday, sunday = get_week_dates(current_year, st.session_state.selected_week)
         st.markdown(f"### 📅 Week {st.session_state.selected_week}")
         st.caption(f"{monday.strftime('%d %b')} - {sunday.strftime('%d %b %Y')}")
-    
     with col3:
         if st.button("Next ▶"):
             st.session_state.selected_week += 1
             st.rerun()
-    
     with col4:
         if st.button("Today"):
             st.session_state.selected_week = get_week_number()
@@ -420,37 +398,28 @@ elif st.session_state.page == 'claim':
     
     week_total = calculate_week_total(st.session_state.selected_week)
     is_over_limit = week_total > 37.5
-    
     st.markdown("---")
-    
     if is_over_limit:
         st.error(f"⚠️ **{week_total:.1f} / 37.5 hours** - Weekly limit exceeded!")
     else:
         st.success(f"✅ **{week_total:.1f} / 37.5 hours**")
-    
-    progress = min(week_total / 37.5, 1.0)
-    st.progress(progress)
+    st.progress(min(week_total / 37.5, 1.0))
     
     st.markdown("---")
-    
     st.subheader("📝 Enter Hours by Module")
     
     if not st.session_state.modules:
         st.warning("No modules available. Please add modules first.")
     else:
         module_stats = calculate_module_stats()
-        
         for module in module_stats:
             with st.container():
                 col1, col2 = st.columns([3, 1])
-                
                 with col1:
-                    st.markdown(f"**{module['name']}**")
+                    st.markdown(f"**{module['id']} - {module['name']}**")
                     st.caption(f"Remaining: {module['remaining']:.1f} hrs of {module['total_hours']} hrs")
-                
                 with col2:
                     current_saved = get_entry_hours(st.session_state.selected_week, module['id'])
-                    
                     input_key = f"input_hours_{module['id']}"
                     if input_key not in st.session_state:
                         st.session_state[input_key] = float(current_saved)
@@ -475,267 +444,161 @@ elif st.session_state.page == 'claim':
                         if st.button("🔄 Reset", key=f"reset_{module['id']}", use_container_width=True):
                             st.session_state[input_key] = float(current_saved)
                             st.rerun()
-                
                 st.markdown("---")
-        
         if is_over_limit:
             st.warning("⚠️ Remember: You cannot claim more than 37.5 hours per week!")
 
 elif st.session_state.page == 'reports':
     st.title("📊 Reports & Analytics")
-    st.write("View detailed reports and export your data")
-    
     if not st.session_state.entries:
-        st.warning("No hours claimed yet. Start claiming hours to see reports!")
+        st.warning("No hours claimed yet.")
     else:
         df = create_detailed_report_df()
-        
         st.markdown("---")
-        st.subheader("📈 Summary Statistics")
-        
         col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.metric("Total Hours Claimed", f"{df['Hours'].sum():.1f}")
-        with col2:
-            st.metric("Weeks Tracked", df['Week'].nunique())
-        with col3:
-            st.metric("Active Modules", df['Module'].nunique())
-        with col4:
-            avg_weekly = df.groupby('Week')['Hours'].sum().mean()
-            st.metric("Avg Weekly Hours", f"{avg_weekly:.1f}")
+        with col1: st.metric("Total Hours", f"{df['Hours'].sum():.1f}")
+        with col2: st.metric("Weeks", df['Week'].nunique())
+        with col3: st.metric("Modules", df['Module'].nunique())
+        with col4: st.metric("Avg Weekly", f"{df.groupby('Week')['Hours'].sum().mean():.1f}")
         
         st.markdown("---")
-        
-        st.subheader("🔍 Filter by Date Range")
         col1, col2 = st.columns(2)
         all_weeks = sorted(df['Week'].unique())
-        with col1:
-            start_week = st.selectbox("From Week", all_weeks, index=0)
-        with col2:
-            end_week = st.selectbox("To Week", all_weeks, index=len(all_weeks)-1)
-        
+        with col1: start_week = st.selectbox("From Week", all_weeks, index=0)
+        with col2: end_week = st.selectbox("To Week", all_weeks, index=len(all_weeks)-1)
         filtered_df = df[(df['Week'] >= start_week) & (df['Week'] <= end_week)]
         
         st.markdown("---")
-        
-        tab1, tab2, tab3, tab4 = st.tabs(["📊 Weekly Hours", "🎯 Module Breakdown", "📉 Module Progress", "📅 Weekly by Module"])
-        
+        tab1, tab2, tab3, tab4 = st.tabs(["📊 Weekly", "🎯 By Module", "📉 Progress", "📅 Weekly x Module"])
         with tab1:
-            weekly_data = filtered_df.groupby('Week')['Hours'].sum().reset_index()
-            fig = go.Figure()
-            fig.add_trace(go.Bar(
-                x=weekly_data['Week'],
-                y=weekly_data['Hours'],
-                marker_color=['red' if h > 37.5 else 'green' for h in weekly_data['Hours']],
-                text=weekly_data['Hours'].round(1),
-                textposition='outside'
-            ))
-            fig.add_hline(y=37.5, line_dash="dash", line_color="red", annotation_text="37.5 hr limit")
-            fig.update_layout(xaxis_title="Week Number", yaxis_title="Hours", showlegend=False, height=400)
+            weekly = filtered_df.groupby('Week')['Hours'].sum().reset_index()
+            fig = go.Figure(go.Bar(x=weekly['Week'], y=weekly['Hours'], 
+                                   marker_color=['red' if h>37.5 else 'green' for h in weekly['Hours']],
+                                   text=weekly['Hours'].round(1), textposition='outside'))
+            fig.add_hline(y=37.5, line_dash="dash", line_color="red")
+            fig.update_layout(height=400, showlegend=False)
             st.plotly_chart(fig, use_container_width=True)
-            over_limit = weekly_data[weekly_data['Hours'] > 37.5]
-            if not over_limit.empty:
-                st.warning(f"⚠️ {len(over_limit)} week(s) exceeded the 37.5 hour limit!")
-        
         with tab2:
-            module_data = filtered_df.groupby('Module')['Hours'].sum().reset_index()
-            fig = px.pie(module_data, values='Hours', names='Module', title='Total Hours Distribution by Module')
+            mod_data = filtered_df.groupby('Module')['Hours'].sum().reset_index()
+            fig = px.pie(mod_data, values='Hours', names='Module')
             st.plotly_chart(fig, use_container_width=True)
-            st.dataframe(module_data.sort_values('Hours', ascending=False), use_container_width=True, hide_index=True)
-        
         with tab3:
-            module_stats = calculate_module_stats()
-            progress_df = pd.DataFrame(module_stats)
+            stats = calculate_module_stats()
+            dfp = pd.DataFrame(stats)
             fig = go.Figure()
-            fig.add_trace(go.Bar(name='Claimed', x=progress_df['name'], y=progress_df['claimed'], marker_color='lightblue'))
-            fig.add_trace(go.Bar(name='Remaining', x=progress_df['name'], y=progress_df['remaining'], marker_color='lightgray'))
-            fig.update_layout(barmode='stack', xaxis_title="Module", yaxis_title="Hours", height=400)
+            fig.add_bar(x=dfp['id'], y=dfp['claimed'], name='Claimed')
+            fig.add_bar(x=dfp['id'], y=dfp['remaining'], name='Remaining')
+            fig.update_layout(barmode='stack', height=400)
             st.plotly_chart(fig, use_container_width=True)
-            st.dataframe(
-                progress_df[['name', 'claimed', 'total_hours', 'remaining']]
-                .rename(columns={'name': 'Module', 'claimed': 'Claimed (hrs)', 'total_hours': 'Total (hrs)', 'remaining': 'Remaining (hrs)'}),
-                use_container_width=True,
-                hide_index=True
-            )
-        
         with tab4:
-            pivot_data = filtered_df.pivot_table(values='Hours', index='Week', columns='Module', aggfunc='sum', fill_value=0)
+            pivot = filtered_df.pivot_table(values='Hours', index='Week', columns='Module', fill_value=0)
             fig = go.Figure()
-            for module in pivot_data.columns:
-                fig.add_trace(go.Bar(name=module, x=pivot_data.index, y=pivot_data[module]))
-            fig.update_layout(barmode='stack', xaxis_title="Week Number", yaxis_title="Hours", height=400)
+            for col in pivot.columns:
+                fig.add_bar(x=pivot.index, y=pivot[col], name=col)
+            fig.update_layout(barmode='stack', height=400)
             st.plotly_chart(fig, use_container_width=True)
         
         st.markdown("---")
-        
-        st.subheader("📥 Export Data")
         col1, col2 = st.columns(2)
         with col1:
             csv = filtered_df.to_csv(index=False)
-            st.download_button("📄 Download as CSV", csv, f"hours_report_{start_week}_to_{end_week}.csv", "text/csv", use_container_width=True)
+            st.download_button("📄 CSV", csv, f"report_{start_week}-{end_week}.csv", use_container_width=True)
         with col2:
             excel_data = to_excel(filtered_df)
-            st.download_button("📊 Download as Excel", excel_data, f"hours_report_{start_week}_to_{end_week}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
-        
-        st.markdown("---")
-        st.subheader("📋 Detailed Hours Log")
+            st.download_button("📊 Excel", excel_data, f"report_{start_week}-{end_week}.xlsx", use_container_width=True)
         st.dataframe(filtered_df.sort_values(['Week', 'Module']), use_container_width=True, hide_index=True)
 
 else:
-    # CALENDAR VIEWER — reads from calendar_data/ folder in Git
+    # CALENDAR VIEWER — reads from calendar_data/ in Git
     st.title("📅 Calendar Viewer")
-    st.write("Displays all `.ics` files from the `calendar_data/` folder in your GitHub repo")
-
-    st.markdown("---")
-
     CALENDAR_DIR = "calendar_data"
     if not os.path.exists(CALENDAR_DIR):
-        st.error(f"❌ The folder `{CALENDAR_DIR}` does not exist. Please add it to your GitHub repository with your .ics files.")
+        st.error(f"❌ Folder `{CALENDAR_DIR}` not found in repo.")
         st.stop()
-
     ics_files = [f for f in os.listdir(CALENDAR_DIR) if f.endswith('.ics')]
     if not ics_files:
-        st.warning(f"📁 No `.ics` files found in `{CALENDAR_DIR}`. Add calendar files (e.g., `work.ics`, `uni.ics`) to this folder in your GitHub repo.")
+        st.warning(f"📁 No .ics files in `{CALENDAR_DIR}`.")
         st.stop()
-
-    # Load calendars
+    
     calendars = {}
-    load_errors = []
     for filename in ics_files:
-        filepath = os.path.join(CALENDAR_DIR, filename)
-        source_name = filename.replace('.ics', '')
         try:
-            with open(filepath, 'rb') as f:
-                cal = Calendar.from_ical(f.read())
-            calendars[source_name] = cal
+            with open(os.path.join(CALENDAR_DIR, filename), 'rb') as f:
+                calendars[filename.replace('.ics', '')] = Calendar.from_ical(f.read())
         except Exception as e:
-            load_errors.append(f"{filename}: {str(e)}")
-
-    if load_errors:
-        st.warning("⚠️ Some calendars failed to load:")
-        for err in load_errors:
-            st.caption(f"- {err}")
-
+            st.warning(f"⚠️ Failed to load {filename}: {e}")
+    
     if not calendars:
-        st.error("❌ No valid calendars could be loaded.")
+        st.error("❌ No valid calendars.")
         st.stop()
-
-    # Extract all events
+    
     all_events = []
-    for source_name, cal in calendars.items():
-        for component in cal.walk():
-            if component.name == "VEVENT":
-                dtstart = component.get('dtstart')
-                dtend = component.get('dtend')
-                if not dtstart or not dtend:
-                    continue
-                summary = str(component.get('summary', 'No Title'))
-                start = dtstart.dt
-                end = dtend.dt
-                is_allday = not isinstance(start, datetime)
+    for src, cal in calendars.items():
+        for comp in cal.walk():
+            if comp.name == "VEVENT":
+                dtstart, dtend = comp.get('dtstart'), comp.get('dtend')
+                if not dtstart or not dtend: continue
                 all_events.append({
-                    'start': start,
-                    'end': end,
-                    'summary': summary,
-                    'is_allday': is_allday,
-                    'source': source_name
+                    'start': dtstart.dt,
+                    'end': dtend.dt,
+                    'summary': str(comp.get('summary', 'No Title')),
+                    'is_allday': not isinstance(dtstart.dt, datetime),
+                    'source': src
                 })
-
+    
     if not all_events:
-        st.warning("📭 No events found in any calendar.")
+        st.warning("📭 No events found.")
         st.stop()
-
-    # Week navigation with TODAY
+    
     col1, col2, col3, col4 = st.columns([1, 2, 1, 1])
-    with col1:
-        if st.button("◀ Previous Week", key="cal_prev"):
-            st.session_state.calendar_week_start -= timedelta(days=7)
-            st.rerun()
+    with col1: 
+        if st.button("◀ Previous Week"): 
+            st.session_state.calendar_week_start -= timedelta(days=7); st.rerun()
     with col2:
-        week_end = st.session_state.calendar_week_start + timedelta(days=6)
-        st.markdown(f"### {st.session_state.calendar_week_start.strftime('%B %d')} – {week_end.strftime('%B %d, %Y')}")
-    with col3:
-        if st.button("Next Week ▶", key="cal_next"):
-            st.session_state.calendar_week_start += timedelta(days=7)
-            st.rerun()
-    with col4:
-        if st.button("Today", key="cal_today"):
-            st.session_state.calendar_week_start = get_week_monday(datetime.today().date())
-            st.rerun()
-
-    # Legend
-    unique_sources = sorted(set(e['source'] for e in all_events))
+        end = st.session_state.calendar_week_start + timedelta(days=6)
+        st.markdown(f"### {st.session_state.calendar_week_start.strftime('%B %d')} – {end.strftime('%B %d, %Y')}")
+    with col3: 
+        if st.button("Next Week ▶"): 
+            st.session_state.calendar_week_start += timedelta(days=7); st.rerun()
+    with col4: 
+        if st.button("Today"): 
+            st.session_state.calendar_week_start = get_week_monday(datetime.today().date()); st.rerun()
+    
+    sources = sorted(set(e['source'] for e in all_events))
     st.markdown("---")
-    st.markdown("**Calendar Sources:**")
-    cols = st.columns(min(len(unique_sources), 4))
-    for idx, source in enumerate(unique_sources):
-        with cols[idx % 4]:
-            icon = get_source_icon(source)
-            color = get_source_color(source)
-            st.markdown(f"<span style='color: {color};'>●</span> {icon} **{source}**", unsafe_allow_html=True)
-
+    cols = st.columns(min(len(sources), 4))
+    for i, s in enumerate(sources):
+        with cols[i % 4]:
+            st.markdown(f"<span style='color:{get_source_color(s)}'>●</span> {get_source_icon(s)} **{s}**", unsafe_allow_html=True)
+    
     st.markdown("---")
-
-    # Display week
-    current_day = st.session_state.calendar_week_start
+    current = st.session_state.calendar_week_start
     local_tz = datetime.now().astimezone().tzinfo
-
     for i in range(7):
-        target_date = current_day
-        day_events = [
-            e for e in all_events
-            if (e['start'].date() if isinstance(e['start'], datetime) else e['start']) == target_date
-        ]
-        day_events.sort(key=lambda x: (
-            not x['is_allday'],
-            x['start'].time() if isinstance(x['start'], datetime) else datetime.min.time()
-        ))
-
-        day_name = current_day.strftime("%A, %B %d")
-        is_weekend = i >= 5
-        with st.expander(f"{'🌅 ' if is_weekend else '📅 '}{day_name}", expanded=(i < 2)):
+        day_events = [e for e in all_events if (e['start'].date() if isinstance(e['start'], datetime) else e['start']) == current]
+        day_events.sort(key=lambda x: (not x['is_allday'], x['start'].time() if isinstance(x['start'], datetime) else datetime.min.time()))
+        with st.expander(f"{'🌅' if i>=5 else '📅'} {current.strftime('%A, %B %d')}", expanded=i<2):
             if not day_events:
-                st.info("No events scheduled")
+                st.info("No events")
             else:
                 for e in day_events:
-                    source = e['source']
-                    color = get_source_color(source)
-                    icon = get_source_icon(source)
+                    color = get_source_color(e['source'])
+                    icon = get_source_icon(e['source'])
                     if e['is_allday']:
                         time_str = "🕗 All-day"
                     else:
-                        start_disp = e['start']
-                        end_disp = e['end']
-                        if isinstance(start_disp, datetime) and start_disp.tzinfo is None:
-                            start_disp = start_disp.replace(tzinfo=local_tz)
-                        if isinstance(end_disp, datetime) and end_disp.tzinfo is None:
-                            end_disp = end_disp.replace(tzinfo=local_tz)
-                        start_time = start_disp.strftime("%H:%M")
-                        end_time = end_disp.strftime("%H:%M") if isinstance(end_disp, datetime) else "??:??"
-                        time_str = f"🕒 {start_time} - {end_time}"
-                    st.markdown(
-                        f"<div style='background-color: {color}22; padding: 10px; border-left: 4px solid {color}; margin-bottom: 8px; border-radius: 4px;'>"
-                        f"<strong style='color: {color};'>{icon} {source}</strong> | {time_str}<br/>"
-                        f"<span style='color: #333;'>{e['summary']}</span>"
-                        f"</div>",
-                        unsafe_allow_html=True
-                    )
-        current_day += timedelta(days=1)
-
-    # Stats
+                        start = e['start'].replace(tzinfo=local_tz) if e['start'].tzinfo is None else e['start'].astimezone(local_tz)
+                        end = e['end'].replace(tzinfo=local_tz) if isinstance(e['end'], datetime) and e['end'].tzinfo is None else (e['end'].astimezone(local_tz) if isinstance(e['end'], datetime) else e['end'])
+                        time_str = f"🕒 {start.strftime('%H:%M')} - {end.strftime('%H:%M') if isinstance(end, datetime) else '??:??'}"
+                    st.markdown(f"<div style='background-color:{color}22;padding:10px;border-left:4px solid {color};border-radius:4px;margin-bottom:8px;'><strong style='color:{color}'>{icon} {e['source']}</strong> | {time_str}<br><span>{e['summary']}</span></div>", unsafe_allow_html=True)
+        current += timedelta(days=1)
+    
     st.markdown("---")
-    st.subheader("📊 Calendar Statistics")
     col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Total Events", len(all_events))
-    with col2:
-        st.metric("Calendars", len(calendars))
-    with col3:
-        allday_count = sum(1 for e in all_events if e['is_allday'])
-        st.metric("All-day Events", allday_count)
-
-    # Optional: Force reload (useful after Git update)
-    st.markdown("---")
-    if st.button("🔄 Reload Calendars from GitHub", help="Click after updating calendar_data in your repo"):
+    with col1: st.metric("Events", len(all_events))
+    with col2: st.metric("Calendars", len(calendars))
+    with col3: st.metric("All-day", sum(1 for e in all_events if e['is_allday']))
+    
+    if st.button("🔄 Reload Calendars from GitHub"):
         st.cache_data.clear()
         st.rerun()
