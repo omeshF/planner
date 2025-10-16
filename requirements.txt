@@ -4,3 +4,5 @@ plotly
 openpyxl
 tzlocal
 icalendar
+gspread
+oauth2client
