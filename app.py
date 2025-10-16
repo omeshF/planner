@@ -93,17 +93,43 @@ def save_sheet_data(worksheet_name, data):
 # ==============================
 def load_modules():
     records = load_sheet_data("modules")
-    if not records:
-        return [], 1
     modules = []
+    next_id = 1
     for r in records:
-        modules.append({
-            'id': int(r['id']),
-            'name': str(r['name']),
-            'total_hours': float(r['total_hours'])
-        })
-    next_id = max(m['id'] for m in modules) + 1
+        try:
+            # Skip rows with missing/invalid id
+            if not r.get('id') or str(r['id']).strip() == '':
+                continue
+            module_id = int(float(r['id']))  # handles "1.0" from Sheets
+            total_hours = float(r['total_hours'])
+            modules.append({
+                'id': module_id,
+                'name': str(r['name']).strip(),
+                'total_hours': total_hours
+            })
+            if module_id >= next_id:
+                next_id = module_id + 1
+        except (ValueError, KeyError, TypeError) as e:
+            st.warning(f"⚠️ Skipping invalid module row: {r}")
+            continue
     return modules, next_id
+
+def load_entries():
+    records = load_sheet_data("entries")
+    entries = []
+    for r in records:
+        try:
+            if not r.get('week') or not r.get('module_id') or not r.get('hours'):
+                continue
+            entries.append({
+                'week': int(float(r['week'])),
+                'module_id': int(float(r['module_id'])),
+                'hours': float(r['hours'])
+            })
+        except (ValueError, KeyError, TypeError) as e:
+            st.warning(f"⚠️ Skipping invalid entry row: {r}")
+            continue
+    return entries
 
 def load_entries():
     records = load_sheet_data("entries")
