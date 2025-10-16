@@ -6,6 +6,15 @@ import plotly.graph_objects as go
 from io import BytesIO
 from icalendar import Calendar
 import os
+import json
+
+# Optional: gspread for Google Sheets
+try:
+    import gspread
+    from google.oauth2.service_account import Credentials
+    GSHEETS_AVAILABLE = True
+except ImportError:
+    GSHEETS_AVAILABLE = False
 
 # Page configuration
 st.set_page_config(
@@ -14,52 +23,108 @@ st.set_page_config(
     layout="wide"
 )
 
-# Initialize Google Sheets connection
-@st.cache_resource
-def get_connection():
-    return st.connection("gsheets", type="gsheets")
-
-conn = get_connection()
-
-def load_modules():
+# ==============================
+# GOOGLE SHEETS INTEGRATION
+# ==============================
+def get_gsheets_client():
+    """Create a gspread client using Streamlit secrets"""
+    if not GSHEETS_AVAILABLE:
+        st.error("❌ gspread not installed. Add it to requirements.txt")
+        st.stop()
+    
+    # Get credentials from Streamlit secrets
     try:
-        df = conn.read(worksheet="modules", ttl=0)
-        if df.empty:
-            return [], 1
-        df = df.astype({'id': 'int64', 'total_hours': 'float64'})
-        modules = df.to_dict('records')
-        next_id = df['id'].max() + 1 if not df.empty else 1
-        return modules, next_id
+        creds_info = st.secrets["google_sheets"]["credentials"]
+        if isinstance(creds_info, str):
+            creds_info = json.loads(creds_info)
+        creds = Credentials.from_service_account_info(
+            creds_info,
+            scopes=["https://www.googleapis.com/auth/spreadsheets"]
+        )
+        return gspread.authorize(creds)
     except Exception as e:
-        st.warning(f"⚠️ Could not load modules: {e}")
-        return [], 1
+        st.error(f"❌ Google Sheets auth failed: {e}")
+        st.stop()
 
-def load_entries():
+def load_sheet_data(worksheet_name):
+    """Load data from a worksheet as list of dicts"""
     try:
-        df = conn.read(worksheet="entries", ttl=0)
-        if df.empty:
-            return []
-        df = df.astype({'week': 'int64', 'module_id': 'int64', 'hours': 'float64'})
-        return df.to_dict('records')
+        sheet_url = st.secrets["google_sheets"]["url"]
+        gc = get_gsheets_client()
+        sheet = gc.open_by_url(sheet_url)
+        worksheet = sheet.worksheet(worksheet_name)
+        records = worksheet.get_all_records()
+        return records
     except Exception as e:
-        st.warning(f"⚠️ Could not load entries: {e}")
+        st.warning(f"⚠️ Could not load '{worksheet_name}': {e}")
         return []
 
+def save_sheet_data(worksheet_name, data):
+    """Save list of dicts to worksheet"""
+    try:
+        sheet_url = st.secrets["google_sheets"]["url"]
+        gc = get_gsheets_client()
+        sheet = gc.open_by_url(sheet_url)
+        
+        # Create worksheet if it doesn't exist
+        try:
+            worksheet = sheet.worksheet(worksheet_name)
+        except gspread.exceptions.WorksheetNotFound:
+            worksheet = sheet.add_worksheet(title=worksheet_name, rows="1000", cols="10")
+        
+        if not data:
+            # Clear sheet
+            worksheet.clear()
+            return
+        
+        df = pd.DataFrame(data)
+        # Ensure correct column order
+        if worksheet_name == "modules":
+            df = df[['id', 'name', 'total_hours']]
+        elif worksheet_name == "entries":
+            df = df[['week', 'module_id', 'hours']]
+        
+        worksheet.update([df.columns.tolist()] + df.values.tolist())
+    except Exception as e:
+        st.error(f"❌ Failed to save '{worksheet_name}': {e}")
+
+# ==============================
+# DATA LOADING / SAVING
+# ==============================
+def load_modules():
+    records = load_sheet_data("modules")
+    if not records:
+        return [], 1
+    modules = []
+    for r in records:
+        modules.append({
+            'id': int(r['id']),
+            'name': str(r['name']),
+            'total_hours': float(r['total_hours'])
+        })
+    next_id = max(m['id'] for m in modules) + 1
+    return modules, next_id
+
+def load_entries():
+    records = load_sheet_data("entries")
+    entries = []
+    for r in records:
+        entries.append({
+            'week': int(r['week']),
+            'module_id': int(r['module_id']),
+            'hours': float(r['hours'])
+        })
+    return entries
+
 def save_modules(modules):
-    if modules:
-        df = pd.DataFrame(modules)
-        conn.update(worksheet="modules", data=df)
-    else:
-        # Clear sheet
-        conn.update(worksheet="modules", data=pd.DataFrame())
+    save_sheet_data("modules", modules)
 
 def save_entries(entries):
-    if entries:
-        df = pd.DataFrame(entries)
-        conn.update(worksheet="entries", data=df)
-    else:
-        conn.update(worksheet="entries", data=pd.DataFrame())
+    save_sheet_data("entries", entries)
 
+# ==============================
+# Rest of your app (unchanged functions)
+# ==============================
 def get_source_color(source):
     color_map = {
         'gmail': '#EA4335',
@@ -220,10 +285,6 @@ elif page == "📊 Reports":
     st.session_state.page = 'reports'
 else:
     st.session_state.page = 'calendar'
-
-# Persistent data warning
-if st.session_state.page in ['modules', 'claim', 'reports']:
-    st.info("✅ **Your data is now saved permanently in Google Sheets!** Changes persist across sessions.")
 
 # Main App
 if st.session_state.page == 'modules':
