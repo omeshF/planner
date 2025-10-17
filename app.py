@@ -403,6 +403,7 @@ elif st.session_state.page == 'reports':
 
 else:
     # CALENDAR VIEWER — FROM GOOGLE DRIVE
+    st.session_state.calendar_week_start = get_week_monday(datetime.today().date())
     st.title("📅 Calendar Viewer")
     calendars = load_calendars_from_drive()
     if not calendars:
