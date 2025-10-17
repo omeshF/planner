@@ -314,7 +314,10 @@ elif st.session_state.page == 'claim':
     total = calculate_week_total(st.session_state.selected_week)
     over = total > 37.5
     st.markdown("---")
-    st.error(f"⚠️ **{total:.1f} / 37.5 hours** - Limit exceeded!") if over else st.success(f"✅ **{total:.1f} / 37.5 hours**")
+    if over:
+        st.error(f"⚠️ **{total:.1f} / 37.5 hours** - Limit exceeded!")
+    else:
+        st.success(f"✅ **{total:.1f} / 37.5 hours**")
     st.progress(min(total / 37.5, 1.0))
     
     st.markdown("---")
