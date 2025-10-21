@@ -295,27 +295,36 @@ if st.session_state.page == 'modules':
 elif st.session_state.page == 'claim':
     st.title("⏰ Claim Hours")
     st.markdown("---")
-    col1, col2, col3, col4 = st.columns([1, 3, 1, 1])
-    with col1: 
-        if st.button("◀ Previous"): 
-            st.session_state.selected_week = max(1, st.session_state.selected_week - 1); st.rerun()
-    with col2:
-        year = datetime.now().year
-        monday, sunday = get_week_dates(year, st.session_state.selected_week)
-        st.markdown(f"### 📅 Week {st.session_state.selected_week}")
-        st.caption(f"{monday.strftime('%d %b')} - {sunday.strftime('%d %b %Y')}")
-    with col3: 
-        if st.button("Next ▶"): 
-            st.session_state.selected_week += 1; st.rerun()
-    with col4: 
-        if st.button("Today"): 
-            st.session_state.selected_week = get_week_number(); st.rerun()
     
-    total = calculate_week_total(st.session_state.selected_week)
+    # Date input instead of week navigation
+    st.subheader("📅 Select Date")
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        # Default to today
+        default_date = datetime.today().date()
+        selected_date = st.date_input(
+            "Choose a date to log hours for",
+            value=default_date,
+            max_value=datetime.today().date(),  # Prevent future dates
+            label_visibility="collapsed"
+        )
+    with col2:
+        if st.button("📆 Today", use_container_width=True):
+            st.session_state.claim_date = datetime.today().date()
+            st.rerun()
+    
+    # Auto-calculate week from selected date
+    selected_week = selected_date.isocalendar()[1]
+    year = selected_date.isocalendar()[0]  # Use year from selected date (handles year boundaries)
+    monday, sunday = get_week_dates(year, selected_week)
+    st.caption(f"🗓️ **Week {selected_week}** ({monday.strftime('%d %b')} – {sunday.strftime('%d %b %Y')})")
+
+    # Weekly total and limit check
+    total = calculate_week_total(selected_week)
     over = total > 37.5
     st.markdown("---")
     if over:
-        st.error(f"⚠️ **{total:.1f} / 37.5 hours** - Limit exceeded!")
+        st.error(f"⚠️ **{total:.1f} / 37.5 hours** - Weekly limit exceeded!")
     else:
         st.success(f"✅ **{total:.1f} / 37.5 hours**")
     st.progress(min(total / 37.5, 1.0))
@@ -328,24 +337,36 @@ elif st.session_state.page == 'claim':
         for m in calculate_module_stats():
             with st.container():
                 col1, col2 = st.columns([3, 1])
-                with col1: st.markdown(f"**{m['id']} - {m['name']}**"); st.caption(f"Remaining: {m['remaining']:.1f}h of {m['total_hours']}h")
+                with col1:
+                    st.markdown(f"**{m['id']} - {m['name']}**")
+                    st.caption(f"Remaining: {m['remaining']:.1f}h of {m['total_hours']}h")
                 with col2:
-                    saved = get_entry_hours(st.session_state.selected_week, m['id'])
+                    saved = get_entry_hours(selected_week, m['id'])
                     key = f"input_{m['id']}"
-                    if key not in st.session_state: st.session_state[key] = float(saved)
-                    temp = st.number_input("Hours", min_value=0.0, max_value=200.0, value=st.session_state[key], step=0.5, key=f"ni_{m['id']}", label_visibility="collapsed")
+                    if key not in st.session_state:
+                        st.session_state[key] = float(saved)
+                    temp = st.number_input(
+                        "Hours",
+                        min_value=0.0,
+                        max_value=200.0,
+                        value=st.session_state[key],
+                        step=0.5,
+                        key=f"ni_{m['id']}",
+                        label_visibility="collapsed"
+                    )
                     st.session_state[key] = temp
                     b1, b2 = st.columns(2)
-                    with b1: 
+                    with b1:
                         if st.button("✅ Claim", key=f"claim_{m['id']}", use_container_width=True):
-                            add_or_update_entry(st.session_state.selected_week, m['id'], temp)
+                            add_or_update_entry(selected_week, m['id'], temp)
                             st.rerun()
-                    with b2: 
+                    with b2:
                         if st.button("🔄 Reset", key=f"reset_{m['id']}", use_container_width=True):
                             st.session_state[key] = float(saved)
                             st.rerun()
                 st.markdown("---")
-        if over: st.warning("⚠️ Max 37.5 hours/week")
+        if over:
+            st.warning("⚠️ Remember: You cannot claim more than 37.5 hours per week!")
 
 elif st.session_state.page == 'reports':
     st.title("📊 Reports & Analytics")
